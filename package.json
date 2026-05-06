@@ -1,0 +1,37 @@
+{
+  "name": "cangjie-docs-bundle",
+  "version": "0.1.0",
+  "description": "Mirror generated Cangjie HTML documentation archives.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "download": "tsx src/download-docs-html.ts",
+    "build:versions": "tsx src/build-versions.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zxilly/cangjie-docs-bundle.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Zxilly/cangjie-docs-bundle/issues"
+  },
+  "homepage": "https://github.com/Zxilly/cangjie-docs-bundle#readme",
+  "dependencies": {
+    "@babel/parser": "^7.29.3",
+    "parse5": "^8.0.1",
+    "tar": "^7.5.14"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5"
+  }
+}

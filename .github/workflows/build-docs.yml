@@ -1,0 +1,75 @@
+name: Build Cangjie Docs HTML
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, or all"
+        required: true
+        default: "all"
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || 'all' }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable TCP BBR
+        uses: Zxilly/actions-bbr@v1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Install
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Type check
+        run: npm run check
+
+      - name: Build archives
+        id: build
+        continue-on-error: true
+        run: npm run build:versions -- --version "$VERSION" --keep-going --force --concurrency 32
+
+      - name: Publish releases
+        if: always()
+        shell: bash
+        run: |
+          shopt -s nullglob
+          archives=(dist/cangjie-docs-html-*.tar.gz)
+          if [ ${#archives[@]} -eq 0 ]; then
+            echo "No archives were generated."
+            exit 1
+          fi
+          for archive in "${archives[@]}"; do
+            name="$(basename "$archive")"
+            version="${name#cangjie-docs-html-}"
+            version="${version%.tar.gz}"
+            notes="Mirrored Cangjie docs HTML for ${version} from https://docs.cangjie-lang.cn/docs/${version}/"
+
+            if ! gh release view "$version" >/dev/null 2>&1; then
+              gh release create "$version" --title "$version" --notes "$notes"
+            fi
+            gh release upload "$version" "$archive" --clobber
+          done
+
+      - name: Report build failures
+        if: steps.build.outcome == 'failure'
+        run: exit 1
