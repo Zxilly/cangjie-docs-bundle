@@ -11,7 +11,8 @@ on:
         required: true
         default: "all"
   schedule:
-    - cron: "17 3 * * 1"
+    # Keep mirrored docs synchronized with upstream versions.
+    - cron: "17 3 * * *"
 
 permissions:
   contents: write

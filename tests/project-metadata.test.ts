@@ -40,6 +40,7 @@ describe("project metadata", () => {
 
     expect(workflow).toContain("push:");
     expect(workflow).toContain("schedule:");
+    expect(workflow).toContain('cron: "17 3 * * *"');
     expect(workflow).toContain("default: \"all\"");
     expect(workflow).toContain("uses: pnpm/action-setup@v4");
     expect(workflow).toContain("pnpm install --frozen-lockfile");
