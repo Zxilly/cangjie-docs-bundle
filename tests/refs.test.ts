@@ -56,6 +56,37 @@ describe("reference extraction", () => {
     expect(refs).not.toContain("10.7.0");
   });
 
+  test("extracts mdBook inline search index assignment without broad root asset guesses", () => {
+    const refs = extractReferences(
+      Buffer.from(`
+        <script>
+          const path_to_root = "";
+          window.path_to_searchindex_js = "searchindex.js";
+          const selector = ".theme-selected";
+        </script>
+      `),
+      "index.html",
+      "text/html",
+    );
+
+    expect(refs).toContain("searchindex.js");
+    expect(refs).not.toContain(".theme-selected");
+  });
+
+  test("extracts mdBook noscript iframe fallback references", () => {
+    const refs = extractReferences(
+      Buffer.from(`
+        <noscript>
+          <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+        </noscript>
+      `),
+      "index.html",
+      "text/html",
+    );
+
+    expect(refs).toContain("toc.html");
+  });
+
   test("maps URLs to local paths only under the selected docs version", () => {
     const base = "https://docs.cangjie-lang.cn/docs/1.1.0/";
 

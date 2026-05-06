@@ -29,24 +29,26 @@ jobs:
       - name: Enable TCP BBR
         uses: Zxilly/actions-bbr@v1
 
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-          cache: "npm"
+          cache: "pnpm"
 
       - name: Install
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Test
-        run: npm test
+        run: pnpm test
 
       - name: Type check
-        run: npm run check
+        run: pnpm run check
 
       - name: Build archives
         id: build
         continue-on-error: true
-        run: npm run build:versions -- --version "$VERSION" --keep-going --force --concurrency 32
+        run: pnpm run build:versions -- --version "$VERSION" --keep-going --force --concurrency 32
 
       - name: Publish releases
         if: always()

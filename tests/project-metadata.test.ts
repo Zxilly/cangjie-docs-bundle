@@ -8,6 +8,7 @@ describe("project metadata", () => {
   test("uses the cangjie-docs-bundle repository identity", async () => {
     const pkg = JSON.parse(await readFile("package.json", "utf8")) as {
       name: string;
+      packageManager: string;
       repository: { url: string };
       bugs: { url: string };
       homepage: string;
@@ -15,6 +16,7 @@ describe("project metadata", () => {
     const readme = await readFile("README.md", "utf8");
 
     expect(pkg.name).toBe("cangjie-docs-bundle");
+    expect(pkg.packageManager).toMatch(/^pnpm@/);
     expect(pkg.repository.url).toBe("git+https://github.com/Zxilly/cangjie-docs-bundle.git");
     expect(pkg.bugs.url).toBe("https://github.com/Zxilly/cangjie-docs-bundle/issues");
     expect(pkg.homepage).toBe("https://github.com/Zxilly/cangjie-docs-bundle#readme");
@@ -39,7 +41,9 @@ describe("project metadata", () => {
     expect(workflow).toContain("push:");
     expect(workflow).toContain("schedule:");
     expect(workflow).toContain("default: \"all\"");
-    expect(workflow).toContain('npm run build:versions -- --version "$VERSION" --keep-going --force --concurrency 32');
+    expect(workflow).toContain("uses: pnpm/action-setup@v4");
+    expect(workflow).toContain("pnpm install --frozen-lockfile");
+    expect(workflow).toContain('pnpm run build:versions -- --version "$VERSION" --keep-going --force --concurrency 32');
     expect(workflow).toContain('version="${name#cangjie-docs-html-}"');
     expect(workflow).toContain('version="${version%.tar.gz}"');
     expect(workflow).toContain('gh release create "$version" --title "$version" --notes "$notes"');

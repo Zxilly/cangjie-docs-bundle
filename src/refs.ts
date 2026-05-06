@@ -114,7 +114,7 @@ export function extractReferences(
 
 function extractHtmlReferences(source: string): string[] {
   const refs: string[] = [];
-  const document = parse5.parse(source);
+  const document = parse5.parse(source, { scriptingEnabled: false });
   walkHtml(document, (node) => {
     const attrs = getAttrs(node);
     for (const attr of attrs) {
@@ -206,6 +206,9 @@ function looksLikeJavaScriptPathLiteral(value: string): boolean {
   const ref = value.trim();
   if (shouldSkipReference(ref)) {
     return false;
+  }
+  if (/^searchindex(?:-[0-9a-f]{8})?\.js$/i.test(ref)) {
+    return true;
   }
   if (/^https?:\/\//i.test(ref)) {
     return true;

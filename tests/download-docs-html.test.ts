@@ -57,7 +57,6 @@ describe("docs crawler", () => {
         outputDir,
         fetcher,
         concurrency: 3,
-        commonPaths: [],
       });
 
       expect(result.fileCount).toBe(5);
@@ -93,12 +92,79 @@ describe("docs crawler", () => {
         outputDir,
         fetcher,
         concurrency: 2,
-        commonPaths: [],
       });
 
       expect(result.fileCount).toBe(2);
       expect(result.warnings).toEqual([]);
       expect(requested).not.toContain(`${base}libs/std/pkg//pkg_api/item.html`);
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  test("does not request hard-coded mdBook common paths that were not discovered", async () => {
+    const base = "https://docs.example/docs/1.1.0/";
+    const requested: string[] = [];
+    const fetcher = async (url: string): Promise<FetchResult> => {
+      requested.push(url);
+      if (url === base) {
+        return {
+          body: Buffer.from('<script src="toc.js"></script>'),
+          contentType: "text/html",
+        };
+      }
+      if (url === `${base}toc.js`) {
+        return { body: Buffer.from(""), contentType: "application/javascript" };
+      }
+      throw new Error(`unexpected ${url}`);
+    };
+
+    const outputDir = await mkdtemp(path.join(tmpdir(), "cj-docs-"));
+    try {
+      const result = await crawlDocsSite({
+        baseUrl: base,
+        outputDir,
+        fetcher,
+        concurrency: 2,
+      });
+
+      expect(result.fileCount).toBe(2);
+      expect(result.warnings).toEqual([]);
+      expect(requested).toEqual([base, `${base}toc.js`]);
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  test("does not request a discovered file after reaching maxFiles", async () => {
+    const base = "https://docs.example/docs/1.1.0/";
+    const requested: string[] = [];
+    const fetcher = async (url: string): Promise<FetchResult> => {
+      requested.push(url);
+      if (url === base) {
+        return {
+          body: Buffer.from('<a href="extra.html">extra</a>'),
+          contentType: "text/html",
+        };
+      }
+      if (url === `${base}extra.html`) {
+        return { body: Buffer.from("extra"), contentType: "text/html" };
+      }
+      throw new Error(`unexpected ${url}`);
+    };
+
+    const outputDir = await mkdtemp(path.join(tmpdir(), "cj-docs-"));
+    try {
+      await expect(
+        crawlDocsSite({
+          baseUrl: base,
+          outputDir,
+          fetcher,
+          concurrency: 1,
+          maxFiles: 1,
+        }),
+      ).rejects.toThrow(/more than 1 files/);
+      expect(requested).toEqual([base]);
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }

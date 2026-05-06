@@ -17,13 +17,13 @@ It does not rebuild the docs from source. It parses generated HTML/CSS/JavaScrip
 ## Install
 
 ```bash
-npm ci
+pnpm install --frozen-lockfile
 ```
 
 ## Build One Version
 
 ```bash
-npm run download -- 1.1.0 --force --concurrency 32
+pnpm run download -- 1.1.0 --force --concurrency 32
 ```
 
 Output:
@@ -35,7 +35,7 @@ dist/cangjie-docs-html-1.1.0.tar.gz
 ## Build Versions From Manifest
 
 ```bash
-npm run build:versions -- --version all --keep-going --force --concurrency 32
+pnpm run build:versions -- --version all --keep-going --force --concurrency 32
 ```
 
 The manifest is downloaded from:
@@ -47,12 +47,12 @@ https://raw.githubusercontent.com/Zxilly/cangjie-version-manifest/master/version
 To build a single version from the manifest:
 
 ```bash
-npm run build:versions -- --version 1.1.0 --force --concurrency 32
+pnpm run build:versions -- --version 1.1.0 --force --concurrency 32
 ```
 
 ## Test
 
 ```bash
-npm test
-npm run check
+pnpm test
+pnpm run check
 ```

@@ -14,35 +14,6 @@ import {
 export const DEFAULT_BASE_URL = "https://docs.cangjie-lang.cn/docs/{version}/";
 export const USER_AGENT = "cangjie-docs-bundle/0.1 (+https://github.com/Zxilly/cangjie-docs-bundle)";
 
-const DEFAULT_COMMON_PATHS = [
-  "404.html",
-  "print.html",
-  "toc.html",
-  "toc.js",
-  "searchindex.js",
-  "book.js",
-  "clipboard.min.js",
-  "elasticlunr.min.js",
-  "searcher.js",
-  "highlight.js",
-  "highlight.css",
-  "ayu-highlight.css",
-  "tomorrow-night.css",
-  "iframe_post_message.js",
-  "favicon.png",
-  "favicon.svg",
-  "cangjie-highlight-export.js",
-  "assets/elasticlunr.js",
-  "assets/fzf.umd.js",
-  "assets/sidebar.js",
-  "assets/style.css",
-  "assets/theme.css",
-  "css/chrome.css",
-  "css/general.css",
-  "css/print.css",
-  "css/variables.css",
-];
-
 export type FetchResult = {
   body: Buffer;
   contentType: string;
@@ -55,7 +26,6 @@ export type CrawlOptions = {
   outputDir: string;
   fetcher?: Fetcher;
   concurrency?: number;
-  commonPaths?: string[];
   maxFiles?: number;
   retries?: number;
   timeoutMs?: number;
@@ -134,7 +104,6 @@ export async function crawlDocsSite(options: CrawlOptions): Promise<CrawlResult>
   const concurrency = Math.max(1, options.concurrency ?? 16);
   const maxFiles = options.maxFiles ?? 10_000;
   const fetcher = options.fetcher ?? ((url: string) => fetchUrl(url, options));
-  const commonPaths = options.commonPaths ?? DEFAULT_COMMON_PATHS;
   const queue: string[] = [];
   const discovered = new Set<string>();
   const seen = new Set<string>();
@@ -160,6 +129,11 @@ export async function crawlDocsSite(options: CrawlOptions): Promise<CrawlResult>
         const url = queue.shift();
         if (!url || seen.has(url)) {
           continue;
+        }
+        if (seen.size >= maxFiles) {
+          rejected = true;
+          reject(new Error(`refusing to download more than ${maxFiles} files`));
+          return;
         }
         seen.add(url);
         active += 1;
@@ -222,9 +196,6 @@ export async function crawlDocsSite(options: CrawlOptions): Promise<CrawlResult>
     }
 
     enqueue(baseUrl);
-    for (const item of commonPaths) {
-      enqueue(new URL(item, baseUrl).toString());
-    }
     pump();
   });
 }
