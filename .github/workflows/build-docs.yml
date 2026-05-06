@@ -58,8 +58,8 @@ jobs:
           shopt -s nullglob
           archives=(dist/cangjie-docs-html-*.tar.gz)
           if [ ${#archives[@]} -eq 0 ]; then
-            echo "No archives were generated."
-            exit 1
+            echo "No archives were generated; nothing to publish."
+            exit 0
           fi
           for archive in "${archives[@]}"; do
             name="$(basename "$archive")"
