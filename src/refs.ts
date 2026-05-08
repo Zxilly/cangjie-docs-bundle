@@ -56,7 +56,7 @@ export function shouldSkipReference(ref: string): boolean {
   if (Array.from(value).some((char) => /\s/.test(char))) {
     return true;
   }
-  if (/['"<>{}\\()=;\[\]]/.test(value)) {
+  if (/['"<>{}\\();\[\]]/.test(value)) {
     return true;
   }
   if (value.includes(".href")) {
@@ -207,7 +207,7 @@ function looksLikeJavaScriptPathLiteral(value: string): boolean {
   if (shouldSkipReference(ref)) {
     return false;
   }
-  if (/^searchindex(?:-[0-9a-f]{8})?\.js$/i.test(ref)) {
+  if (/^searchindex(?:-[0-9a-f]{8})?\.(?:js|json)$/i.test(ref)) {
     return true;
   }
   if (/^https?:\/\//i.test(ref)) {

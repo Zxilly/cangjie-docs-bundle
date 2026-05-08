@@ -106,6 +106,46 @@ describe("reference extraction", () => {
     expect(shouldSkipReference("dev-guide/basic.html")).toBe(false);
   });
 
+  test("keeps cache-busted asset URLs that carry a query string", () => {
+    expect(shouldSkipReference("../fonts/fontawesome-webfont.woff2?v=4.7.0")).toBe(false);
+    expect(shouldSkipReference("../fonts/fontawesome-webfont.eot?#iefix&v=4.7.0")).toBe(false);
+
+    const refs = extractReferences(
+      Buffer.from(
+        `@font-face{src:url('../fonts/fontawesome-webfont.eot?v=4.7.0');` +
+          `src:url('../fonts/fontawesome-webfont.eot?#iefix&v=4.7.0') format('embedded-opentype'),` +
+          `url('../fonts/fontawesome-webfont.woff2?v=4.7.0') format('woff2'),` +
+          `url('../fonts/fontawesome-webfont.woff?v=4.7.0') format('woff'),` +
+          `url('../fonts/fontawesome-webfont.ttf?v=4.7.0') format('truetype'),` +
+          `url('../fonts/fontawesome-webfont.svg?v=4.7.0#fontawesomeregular') format('svg')}`,
+      ),
+      "FontAwesome/css/font-awesome.css",
+      "text/css",
+    );
+
+    expect(refs).toEqual(
+      expect.arrayContaining([
+        "../fonts/fontawesome-webfont.woff2?v=4.7.0",
+        "../fonts/fontawesome-webfont.woff?v=4.7.0",
+        "../fonts/fontawesome-webfont.ttf?v=4.7.0",
+      ]),
+    );
+  });
+
+  test("extracts mdBook searchindex.json fetched from JavaScript", () => {
+    const refs = extractReferences(
+      Buffer.from(`
+        fetch(path_to_root + 'searchindex.json')
+          .then(response => response.json())
+          .catch(error => { script.src = path_to_root + 'searchindex.js'; });
+      `),
+      "searcher.js",
+      "application/javascript",
+    );
+
+    expect(refs).toEqual(expect.arrayContaining(["searchindex.json", "searchindex.js"]));
+  });
+
   test("handles deeply nested generated HTML without recursive stack overflow", () => {
     const html = `${"<div>".repeat(20_000)}<a href="deep/page.html">deep</a>${"</div>".repeat(
       20_000,
