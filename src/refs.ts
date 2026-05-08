@@ -1,12 +1,10 @@
 import { parse as parseJavaScript } from "@babel/parser";
+import { parse as parseCss, walk as walkCss } from "css-tree";
 import * as parse5 from "parse5";
-
-const CSS_URL_RE = /\burl\(\s*(['"]?)(.*?)\1\s*\)/gis;
-const CSS_IMPORT_RE =
-  /@import\s+(?:url\(\s*(['"]?)(.*?)\1\s*\)|(['"])(.*?)\3)/gis;
 
 const HTML_ATTRS = new Set(["href", "src", "poster"]);
 const SRCSET_ATTRS = new Set(["srcset", "imagesrcset"]);
+type CssContext = "stylesheet" | "declarationList";
 
 export function normalizeBaseUrl(url: string): string {
   return url.endsWith("/") ? url : `${url}/`;
@@ -124,7 +122,7 @@ function extractHtmlReferences(source: string): string[] {
       } else if (SRCSET_ATTRS.has(name)) {
         refs.push(...splitSrcset(attr.value));
       } else if (name === "style") {
-        refs.push(...extractCssReferences(attr.value));
+        refs.push(...extractCssReferences(attr.value, "declarationList"));
       }
     }
 
@@ -138,20 +136,41 @@ function extractHtmlReferences(source: string): string[] {
   return refs;
 }
 
-function extractCssReferences(source: string): string[] {
+function extractCssReferences(source: string, context: CssContext = "stylesheet"): string[] {
   const refs: string[] = [];
 
-  for (const match of source.matchAll(CSS_URL_RE)) {
-    if (match[2]) {
-      refs.push(match[2]);
-    }
+  let ast;
+  try {
+    ast = parseCss(source, {
+      context,
+      positions: false,
+      onParseError: () => {},
+    });
+  } catch {
+    return refs;
   }
-  for (const match of source.matchAll(CSS_IMPORT_RE)) {
-    const ref = match[2] ?? match[4];
-    if (ref) {
-      refs.push(ref);
+
+  walkCss(ast, (node) => {
+    if (node.type === "Url") {
+      refs.push(node.value);
+      return;
     }
-  }
+    if (node.type === "Atrule" && node.name.toLowerCase() === "import") {
+      const prelude = node.prelude;
+      if (!prelude || prelude.type !== "AtrulePrelude") {
+        return;
+      }
+      for (const child of prelude.children) {
+        if (child.type === "String") {
+          refs.push(child.value);
+          break;
+        }
+        if (child.type === "Url") {
+          break;
+        }
+      }
+    }
+  });
 
   return refs;
 }
