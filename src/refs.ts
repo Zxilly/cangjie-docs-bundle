@@ -1,50 +1,12 @@
 import { parse as parseJavaScript } from "@babel/parser";
-import { parse as parseCss, walk as walkCss } from "css-tree";
+import { generate as generateCss, parse as parseCss, walk as walkCss } from "css-tree";
 import * as parse5 from "parse5";
+
+import { discoveredReference, type DiscoveredReference, type ReferenceKind } from "./references.js";
 
 const HTML_ATTRS = new Set(["href", "src", "poster"]);
 const SRCSET_ATTRS = new Set(["srcset", "imagesrcset"]);
 type CssContext = "stylesheet" | "declarationList";
-
-export function normalizeBaseUrl(url: string): string {
-  return url.endsWith("/") ? url : `${url}/`;
-}
-
-export function stripUrlFragmentAndQuery(url: string): string {
-  const parsed = new URL(url);
-  parsed.hash = "";
-  parsed.search = "";
-  return parsed.toString();
-}
-
-export function localPathForUrl(url: string, baseUrl: string): string | null {
-  const base = new URL(normalizeBaseUrl(baseUrl));
-  const parsed = new URL(stripUrlFragmentAndQuery(url));
-
-  if (parsed.protocol !== base.protocol || parsed.host !== base.host) {
-    return null;
-  }
-  if (!parsed.pathname.startsWith(base.pathname)) {
-    return null;
-  }
-
-  let relativePath = parsed.pathname.slice(base.pathname.length);
-  if (!relativePath || relativePath.endsWith("/")) {
-    relativePath = `${relativePath}index.html`;
-  }
-
-  try {
-    relativePath = decodeURIComponent(relativePath);
-  } catch {
-    return null;
-  }
-
-  const normalized = pathPosixNormalize(relativePath);
-  if (normalized.startsWith("../") || normalized === ".." || normalized.startsWith("/")) {
-    return null;
-  }
-  return normalized === "." ? "index.html" : normalized;
-}
 
 export function shouldSkipReference(ref: string): boolean {
   const value = ref.trim();
@@ -71,6 +33,13 @@ export function shouldSkipReference(ref: string): boolean {
   if (!lastSegment.includes(".") && !scheme) {
     return true;
   }
+  if (/\.(?:md|markdown)$/i.test(lastSegment)) {
+    return true;
+  }
+  const extension = /\.([^./]+)$/.exec(lastSegment)?.[1];
+  if (extension && /^\d+$/.test(extension)) {
+    return true;
+  }
 
   return false;
 }
@@ -79,9 +48,9 @@ export function extractReferences(
   body: Buffer | string,
   localPath: string,
   contentType = "",
-): string[] {
+): DiscoveredReference[] {
   const text = Buffer.isBuffer(body) ? body.toString("utf8") : body;
-  const refs: string[] = [];
+  const refs: DiscoveredReference[] = [];
   const loweredType = contentType.toLowerCase();
   const loweredPath = localPath.toLowerCase();
 
@@ -101,7 +70,7 @@ export function extractReferences(
     loweredPath.endsWith(".js") ||
     loweredPath.endsWith(".mjs")
   ) {
-    refs.push(...extractJavaScriptReferences(text));
+    refs.push(...extractJavaScriptReferences(text, localPath));
   }
   if (loweredType.includes("json") || loweredPath.endsWith(".json")) {
     refs.push(...extractStringReferences(text));
@@ -110,17 +79,73 @@ export function extractReferences(
   return uniqueUsableReferences(refs);
 }
 
-function extractHtmlReferences(source: string): string[] {
-  const refs: string[] = [];
+export function rewriteCssAssetReferences(
+  source: string,
+  context: CssContext = "stylesheet",
+): string {
+  let ast;
+  try {
+    ast = parseCss(source, {
+      context,
+      positions: false,
+      onParseError: () => {},
+    });
+  } catch {
+    return source;
+  }
+
+  let modified = false;
+  walkCss(ast, (node) => {
+    if (node.type === "Url") {
+      const stripped = stripRelativeQueryString(node.value);
+      if (stripped !== node.value) {
+        node.value = stripped;
+        modified = true;
+      }
+      return;
+    }
+    if (node.type === "Atrule" && node.name.toLowerCase() === "import") {
+      const prelude = node.prelude;
+      if (!prelude || prelude.type !== "AtrulePrelude") {
+        return;
+      }
+      for (const child of prelude.children) {
+        if (child.type === "String") {
+          const stripped = stripRelativeQueryString(child.value);
+          if (stripped !== child.value) {
+            child.value = stripped;
+            modified = true;
+          }
+          break;
+        }
+        if (child.type === "Url") {
+          break;
+        }
+      }
+    }
+  });
+
+  if (!modified) {
+    return source;
+  }
+  try {
+    return generateCss(ast);
+  } catch {
+    return source;
+  }
+}
+
+function extractHtmlReferences(source: string): DiscoveredReference[] {
+  const refs: DiscoveredReference[] = [];
   const document = parse5.parse(source, { scriptingEnabled: false });
   walkHtml(document, (node) => {
     const attrs = getAttrs(node);
     for (const attr of attrs) {
       const name = attr.name.toLowerCase();
       if (HTML_ATTRS.has(name)) {
-        refs.push(attr.value);
+        refs.push(toReference(attr.value, "html-attribute"));
       } else if (SRCSET_ATTRS.has(name)) {
-        refs.push(...splitSrcset(attr.value));
+        refs.push(...splitSrcset(attr.value).map((value) => toReference(value, "html-srcset")));
       } else if (name === "style") {
         refs.push(...extractCssReferences(attr.value, "declarationList"));
       }
@@ -130,14 +155,17 @@ function extractHtmlReferences(source: string): string[] {
     if (tagName === "style") {
       refs.push(...extractCssReferences(getTextContent(node)));
     } else if (tagName === "script" && !attrs.some((attr) => attr.name.toLowerCase() === "src")) {
-      refs.push(...extractJavaScriptReferences(getTextContent(node)));
+      refs.push(...extractJavaScriptReferences(getTextContent(node), ""));
     }
   });
   return refs;
 }
 
-function extractCssReferences(source: string, context: CssContext = "stylesheet"): string[] {
-  const refs: string[] = [];
+function extractCssReferences(
+  source: string,
+  context: CssContext = "stylesheet",
+): DiscoveredReference[] {
+  const refs: DiscoveredReference[] = [];
 
   let ast;
   try {
@@ -152,7 +180,7 @@ function extractCssReferences(source: string, context: CssContext = "stylesheet"
 
   walkCss(ast, (node) => {
     if (node.type === "Url") {
-      refs.push(node.value);
+      refs.push(toReference(node.value, "stylesheet-url"));
       return;
     }
     if (node.type === "Atrule" && node.name.toLowerCase() === "import") {
@@ -162,7 +190,7 @@ function extractCssReferences(source: string, context: CssContext = "stylesheet"
       }
       for (const child of prelude.children) {
         if (child.type === "String") {
-          refs.push(child.value);
+          refs.push(toReference(child.value, "stylesheet-import"));
           break;
         }
         if (child.type === "Url") {
@@ -175,7 +203,10 @@ function extractCssReferences(source: string, context: CssContext = "stylesheet"
   return refs;
 }
 
-function extractJavaScriptReferences(source: string): string[] {
+function extractJavaScriptReferences(
+  source: string,
+  localPath: string,
+): DiscoveredReference[] {
   let ast: unknown;
   try {
     ast = parseJavaScript(source, {
@@ -188,37 +219,55 @@ function extractJavaScriptReferences(source: string): string[] {
     return [];
   }
 
-  const refs: string[] = [];
+  const refs: DiscoveredReference[] = [];
   walkAst(ast, (value) => {
-    refs.push(...extractJavaScriptStringReferences(value));
+    refs.push(...extractJavaScriptStringReferences(value, localPath));
   });
   return refs;
 }
 
-function extractJavaScriptStringReferences(value: string): string[] {
-  const refs: string[] = [];
-  if (/[<][a-zA-Z!/]/.test(value)) {
+function extractJavaScriptStringReferences(
+  value: string,
+  localPath: string,
+): DiscoveredReference[] {
+  const refs: DiscoveredReference[] = [];
+  if (/[<][a-zA-Z!/]/.test(value) && !localPath.startsWith("assets/")) {
     refs.push(...extractHtmlReferences(value));
   }
   if (/\b(?:url\(|@import\b)/i.test(value)) {
     refs.push(...extractCssReferences(value));
   }
   if (looksLikeJavaScriptPathLiteral(value)) {
-    refs.push(value);
+    refs.push(toReference(value, "javascript-path"));
   }
   return refs;
 }
 
-function extractStringReferences(value: string): string[] {
-  const refs: string[] = [];
+function extractStringReferences(value: string): DiscoveredReference[] {
+  const refs: DiscoveredReference[] = [];
   if (/[<][a-zA-Z!/]/.test(value)) {
     refs.push(...extractHtmlReferences(value));
   }
   if (/\b(?:url\(|@import\b)/i.test(value)) {
     refs.push(...extractCssReferences(value));
   }
-  refs.push(value);
+  refs.push(toReference(value, "json-string"));
   return refs;
+}
+
+function stripRelativeQueryString(value: string): string {
+  if (/^[a-zA-Z][a-zA-Z\d+.-]*:/.test(value) || value.startsWith("//")) {
+    return value;
+  }
+  const queryIndex = value.indexOf("?");
+  if (queryIndex < 0) {
+    return value;
+  }
+  const fragmentIndex = value.indexOf("#", queryIndex);
+  if (fragmentIndex < 0) {
+    return value.slice(0, queryIndex);
+  }
+  return value.slice(0, queryIndex) + value.slice(fragmentIndex);
 }
 
 function looksLikeJavaScriptPathLiteral(value: string): boolean {
@@ -238,18 +287,23 @@ function looksLikeJavaScriptPathLiteral(value: string): boolean {
   return ref.includes("/");
 }
 
-function uniqueUsableReferences(refs: string[]): string[] {
+function uniqueUsableReferences(refs: DiscoveredReference[]): DiscoveredReference[] {
   const seen = new Set<string>();
-  const output: string[] = [];
+  const output: DiscoveredReference[] = [];
   for (const ref of refs) {
-    const value = ref.trim();
-    if (shouldSkipReference(value) || seen.has(value)) {
+    const value = ref.value.trim();
+    const key = `${ref.resolution}\0${value}`;
+    if (shouldSkipReference(value) || seen.has(key)) {
       continue;
     }
-    seen.add(value);
-    output.push(value);
+    seen.add(key);
+    output.push({ ...ref, value });
   }
   return output;
+}
+
+function toReference(value: string, kind: ReferenceKind): DiscoveredReference {
+  return discoveredReference(value, { kind });
 }
 
 function splitSrcset(value: string): string[] {
@@ -361,22 +415,4 @@ function walkAst(node: unknown, visitString: (value: string) => void, seen = new
     }
     walkAst(value, visitString, seen);
   }
-}
-
-function pathPosixNormalize(value: string): string {
-  const parts: string[] = [];
-  for (const part of value.split("/")) {
-    if (!part || part === ".") {
-      continue;
-    }
-    if (part === "..") {
-      if (parts.length === 0) {
-        return "../";
-      }
-      parts.pop();
-      continue;
-    }
-    parts.push(part);
-  }
-  return parts.join("/") || ".";
 }

@@ -10,6 +10,10 @@ on:
         description: "Version to build, or all"
         required: true
         default: "all"
+      skip_existing_releases:
+        description: "Skip versions that already have GitHub releases"
+        required: true
+        default: "true"
   schedule:
     # Keep mirrored docs synchronized with upstream versions.
     - cron: "17 3 * * *"
@@ -22,6 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || 'all' }}
+      SKIP_EXISTING_RELEASES: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_existing_releases == 'true' }}
       GH_TOKEN: ${{ github.token }}
 
     steps:
@@ -49,7 +54,18 @@ jobs:
       - name: Build archives
         id: build
         continue-on-error: true
-        run: pnpm run build:versions --version "$VERSION" --keep-going --force --concurrency 32
+        shell: bash
+        run: |
+          args=(
+            --version "$VERSION"
+            --keep-going
+            --force
+            --concurrency 32
+          )
+          if [ "$SKIP_EXISTING_RELEASES" = "true" ]; then
+            args+=(--skip-existing-releases --github-repository "$GITHUB_REPOSITORY")
+          fi
+          pnpm run build:versions -- "${args[@]}"
 
       - name: Publish releases
         if: always()
