@@ -228,6 +228,9 @@ function parseArgs(argv: string[]): BuildVersionsOptions {
     if (!arg) {
       continue;
     }
+    if (arg === "--") {
+      continue;
+    }
     const readValue = (): string => {
       const value = argv[index + 1];
       if (!value) {
