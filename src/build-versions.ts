@@ -2,7 +2,10 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { downloadDocsHtml, USER_AGENT } from "./download-docs-html.js";
+import { z } from "zod";
+
+import { downloadDocsHtml } from "./download-runner.js";
+import { USER_AGENT } from "./http.js";
 
 export const DEFAULT_VERSIONS_URL =
   "https://raw.githubusercontent.com/Zxilly/cangjie-version-manifest/master/versions.json";
@@ -17,16 +20,49 @@ type FetchVersionsOptions = {
   retries?: number;
 };
 
+type ListExistingReleaseVersionsOptions = {
+  repository: string;
+  fetcher?: typeof fetch;
+  token?: string;
+  retries?: number;
+};
+
 type BuildVersionsOptions = {
   version: string;
   versionsJson?: string;
   versionsUrl: string;
+  githubRepository?: string;
+  githubToken?: string;
   buildRoot: string;
   distDir: string;
   force: boolean;
   keepGoing: boolean;
+  skipExistingReleases: boolean;
   concurrency: number;
 };
+
+const versionsManifestSchema = z
+  .object({
+    channels: z
+      .record(
+        z.string(),
+        z
+          .object({
+            versions: z.record(z.string(), z.unknown()).optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+  })
+  .passthrough();
+
+const gitHubReleasePageSchema = z.array(
+  z
+    .object({
+      tag_name: z.string(),
+    })
+    .passthrough(),
+);
 
 export async function fetchVersionsJson(
   url: string,
@@ -55,9 +91,7 @@ export async function fetchVersionsJson(
 }
 
 export async function loadVersionEntries(manifestPath: string): Promise<VersionEntry[]> {
-  const data = JSON.parse(await readFile(manifestPath, "utf8")) as {
-    channels?: Record<string, { versions?: Record<string, unknown> }>;
-  };
+  const data = versionsManifestSchema.parse(JSON.parse(await readFile(manifestPath, "utf8")));
   const entries: VersionEntry[] = [];
   for (const [channel, channelData] of Object.entries(data.channels ?? {})) {
     for (const version of Object.keys(channelData.versions ?? {})) {
@@ -76,6 +110,35 @@ export function selectVersionEntries(entries: VersionEntry[], requested: string)
     throw new Error(`version not found in versions.json: ${requested}`);
   }
   return selected;
+}
+
+export function skipReleasedVersionEntries(
+  entries: VersionEntry[],
+  releasedVersions: Set<string>,
+): VersionEntry[] {
+  return entries.filter((entry) => !releasedVersions.has(entry.version));
+}
+
+export async function listExistingReleaseVersions({
+  repository,
+  fetcher = fetch,
+  token,
+  retries = 2,
+}: ListExistingReleaseVersionsOptions): Promise<Set<string>> {
+  const releasedVersions = new Set<string>();
+  const perPage = 100;
+  for (let page = 1; ; page += 1) {
+    const releases = await fetchReleasePage(
+      `https://api.github.com/repos/${repository}/releases?per_page=${perPage}&page=${page}`,
+      { fetcher, token, retries },
+    );
+    for (const release of releases) {
+      releasedVersions.add(release.tag_name);
+    }
+    if (releases.length < perPage) {
+      return releasedVersions;
+    }
+  }
 }
 
 export async function buildVersionEntry(
@@ -100,7 +163,28 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     await fetchVersionsJson(args.versionsUrl, versionsJson);
   }
 
-  const entries = selectVersionEntries(await loadVersionEntries(versionsJson), args.version);
+  let entries = selectVersionEntries(await loadVersionEntries(versionsJson), args.version);
+  if (args.skipExistingReleases) {
+    const repository = args.githubRepository ?? process.env.GITHUB_REPOSITORY;
+    if (!repository) {
+      throw new Error("--skip-existing-releases requires --github-repository or GITHUB_REPOSITORY");
+    }
+    const releasedVersions = await listExistingReleaseVersions({
+      repository,
+      token: args.githubToken ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN,
+    });
+    const selectedCount = entries.length;
+    entries = skipReleasedVersionEntries(entries, releasedVersions);
+    const skippedCount = selectedCount - entries.length;
+    if (skippedCount > 0) {
+      console.log(`skipped ${skippedCount} already released version(s)`);
+    }
+    if (entries.length === 0) {
+      console.log("all selected versions already have releases; nothing to build");
+      return 0;
+    }
+  }
+
   const failures: Array<{ entry: VersionEntry; error: unknown }> = [];
   for (const entry of entries) {
     console.log(`building ${entry.channel}/${entry.version}`);
@@ -135,6 +219,7 @@ function parseArgs(argv: string[]): BuildVersionsOptions {
     distDir: "dist",
     force: false,
     keepGoing: false,
+    skipExistingReleases: false,
     concurrency: 16,
   };
 
@@ -162,6 +247,12 @@ function parseArgs(argv: string[]): BuildVersionsOptions {
       case "--versions-url":
         args.versionsUrl = readValue();
         break;
+      case "--github-repository":
+        args.githubRepository = readValue();
+        break;
+      case "--github-token":
+        args.githubToken = readValue();
+        break;
       case "--build-root":
         args.buildRoot = readValue();
         break;
@@ -174,6 +265,9 @@ function parseArgs(argv: string[]): BuildVersionsOptions {
       case "--keep-going":
         args.keepGoing = true;
         break;
+      case "--skip-existing-releases":
+        args.skipExistingReleases = true;
+        break;
       case "--concurrency":
         args.concurrency = Number.parseInt(readValue(), 10);
         break;
@@ -183,6 +277,44 @@ function parseArgs(argv: string[]): BuildVersionsOptions {
   }
 
   return args;
+}
+
+async function fetchReleasePage(
+  url: string,
+  {
+    fetcher,
+    token,
+    retries,
+  }: {
+    fetcher: typeof fetch;
+    token?: string;
+    retries: number;
+  },
+): Promise<z.infer<typeof gitHubReleasePageSchema>> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      const headers: Record<string, string> = {
+        Accept: "application/vnd.github+json",
+        "User-Agent": USER_AGENT,
+      };
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+      const response = await fetcher(url, { headers });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${url}`);
+      }
+      return gitHubReleasePageSchema.parse(JSON.parse(await response.text()));
+    } catch (error) {
+      lastError = error;
+      if (attempt >= retries) {
+        break;
+      }
+      await sleep(300 * (attempt + 1));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 function formatError(error: unknown): string {
