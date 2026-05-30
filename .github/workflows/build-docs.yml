@@ -65,7 +65,7 @@ jobs:
           if [ "$SKIP_EXISTING_RELEASES" = "true" ]; then
             args+=(--skip-existing-releases --github-repository "$GITHUB_REPOSITORY")
           fi
-          pnpm run build:versions -- "${args[@]}"
+          pnpm run build:versions "${args[@]}"
 
       - name: Publish releases
         if: always()

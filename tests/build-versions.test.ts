@@ -151,7 +151,7 @@ describe("versions manifest", () => {
         })) as typeof fetch;
 
       await expect(
-        main(["--versions-json", manifest, "--skip-existing-releases", "--concurrency", "1"]),
+        main(["--", "--versions-json", manifest, "--skip-existing-releases", "--concurrency", "1"]),
       ).resolves.toBe(0);
     } finally {
       globalThis.fetch = originalFetch;
